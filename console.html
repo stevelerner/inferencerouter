@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InferenceRouter · control plane</title>
+<style>
+  :root{
+    --bg:#0E1116; --panel:#161B22; --line:#232B36; --ink:#E6EDF3; --muted:#7D8590;
+    --local:#35B5A0;        /* cool = contained / on-prem */
+    --cloud:#E8A13A;        /* warm = egress / cost */
+    --danger:#E5484D;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important} }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+       -webkit-font-smoothing:antialiased}
+  header{display:flex;align-items:baseline;gap:14px;padding:20px 28px;border-bottom:1px solid var(--line)}
+  header .dot{width:9px;height:9px;border-radius:50%;background:var(--local);box-shadow:0 0 12px var(--local)}
+  header h1{font-size:15px;letter-spacing:.14em;text-transform:uppercase;margin:0;font-weight:600}
+  header .sub{color:var(--muted);font-family:var(--mono);font-size:12px}
+  .wrap{display:grid;grid-template-columns:1.15fr .85fr;gap:1px;background:var(--line);
+        min-height:calc(100vh - 62px)}
+  .col{background:var(--bg);padding:24px 28px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+           color:var(--muted);margin:0 0 14px}
+
+  /* hero guarantee */
+  .guarantee{border:1px solid var(--line);border-radius:12px;padding:22px 24px;margin-bottom:22px;
+             background:linear-gradient(180deg,rgba(53,181,160,.06),transparent)}
+  .guarantee .num{font-family:var(--mono);font-size:52px;font-weight:600;line-height:1;color:var(--local)}
+  .guarantee.breach .num{color:var(--danger)}
+  .guarantee .lbl{color:var(--muted);font-size:13px;margin-top:8px}
+
+  /* split bar */
+  .bar{height:14px;border-radius:7px;overflow:hidden;display:flex;background:var(--panel);margin:6px 0 4px}
+  .bar .l{background:var(--local)} .bar .c{background:var(--cloud)}
+  .legend{display:flex;gap:20px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .legend b{color:var(--ink);font-weight:600}
+  .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle}
+
+  .metrics{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+           border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:22px}
+  .metric{background:var(--bg);padding:18px 20px}
+  .metric .v{font-family:var(--mono);font-size:28px;font-weight:600}
+  .metric .k{color:var(--muted);font-size:12px;margin-top:4px}
+  .v.saved{color:var(--local)} .v.spent{color:var(--cloud)}
+
+  /* feed */
+  .feed{display:flex;flex-direction:column;gap:0}
+  .row{display:grid;grid-template-columns:64px 74px 1fr auto;gap:14px;align-items:center;
+       padding:11px 0;border-bottom:1px solid var(--line);animation:in .35s ease}
+  @keyframes in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  .row .ts{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .badge{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.08em;
+         text-transform:uppercase;padding:3px 8px;border-radius:5px;text-align:center}
+  .badge.local{color:var(--local);background:rgba(53,181,160,.12);border:1px solid rgba(53,181,160,.35)}
+  .badge.cloud{color:var(--cloud);background:rgba(232,161,58,.12);border:1px solid rgba(232,161,58,.35)}
+  .row .reason{font-size:13px;color:var(--ink)}
+  .row .tok{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
+  .empty{color:var(--muted);font-family:var(--mono);font-size:13px;padding:24px 0}
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot"></span>
+    <h1>InferenceRouter</h1>
+    <span class="sub" id="models">— · —</span>
+  </header>
+
+  <div class="wrap">
+    <section class="col">
+      <p class="eyebrow">Compliance guarantee</p>
+      <div class="guarantee" id="guarantee">
+        <div class="num" id="egress">0</div>
+        <div class="lbl">sensitive bytes sent to cloud &nbsp;·&nbsp; <span id="sens">0</span> sensitive requests, all kept on-prem</div>
+      </div>
+
+      <p class="eyebrow">Where the work ran</p>
+      <div class="bar"><div class="l" id="barL" style="width:50%"></div><div class="c" id="barC" style="width:50%"></div></div>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--local)"></span>on-prem <b id="nLocal">0</b></span>
+        <span><span class="swatch" style="background:var(--cloud)"></span>cloud <b id="nCloud">0</b></span>
+        <span>total <b id="nTotal">0</b></span>
+      </div>
+
+      <div class="metrics">
+        <div class="metric"><div class="v saved" id="saved">$0.00</div><div class="k">saved vs all-cloud</div></div>
+        <div class="metric"><div class="v spent" id="spent">$0.00</div><div class="k">cloud spend (only hard tasks)</div></div>
+      </div>
+    </section>
+
+    <section class="col">
+      <p class="eyebrow">Live routing decisions</p>
+      <div class="feed" id="feed"><div class="empty">waiting for traffic…</div></div>
+    </section>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = n => "$" + Number(n).toFixed(2);
+
+async function tick(){
+  let s; try{ s = await (await fetch("/stats")).json(); }catch(e){ return; }
+  $("models").textContent = `${s.local_model}  ·  ${s.cloud_model}`;
+  $("egress").textContent = s.sensitive_bytes_egressed;
+  $("sens").textContent = s.sensitive;
+  $("guarantee").classList.toggle("breach", s.sensitive_bytes_egressed > 0);
+  $("nLocal").textContent = s.local; $("nCloud").textContent = s.cloud; $("nTotal").textContent = s.total;
+  const tot = Math.max(1, s.local + s.cloud);
+  $("barL").style.width = (100*s.local/tot) + "%";
+  $("barC").style.width = (100*s.cloud/tot) + "%";
+  $("saved").textContent = money(s.saved);
+  $("spent").textContent = money(s.cloud_cost);
+
+  const feed = $("feed");
+  if(!s.feed.length){ return; }
+  feed.innerHTML = s.feed.map(r => `
+    <div class="row">
+      <span class="ts">${r.t}</span>
+      <span class="badge ${r.route}">${r.route === "local" ? "on-prem" : "cloud"}</span>
+      <span class="reason">${r.reason}</span>
+      <span class="tok">${r.tokens_in}→${r.tokens_out} tok</span>
+    </div>`).join("");
+}
+tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>
