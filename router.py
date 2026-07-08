@@ -25,7 +25,7 @@ from pathlib import Path
 # CONFIG (all overridable by environment variables)
 # ----------------------------------------------------------------------------
 LOCAL_BASE   = os.environ.get("LOCAL_BASE",  "http://ollamaIP:11434/v1")
-LOCAL_MODEL  = os.environ.get("LOCAL_MODEL", "qwen3-coder-next:q8_0")
+LOCAL_MODEL  = os.environ.get("LOCAL_MODEL", "qwen3-coder-next:q4_K_M")
 
 CLOUD_BASE   = os.environ.get("CLOUD_BASE",  "https://api.anthropic.com/v1")
 CLOUD_MODEL  = os.environ.get("CLOUD_MODEL", "claude-sonnet-5")  # <-- set to YOUR current model string
@@ -65,6 +65,9 @@ def _text_of(messages):
     return "\n".join(parts)
 
 
+DEBUG_CLASSIFY = os.environ.get("ROUTER_DEBUG") == "1"
+
+
 def classify(messages):
     """Return dict: route, sensitive, complex, reason."""
     text = _text_of(messages)
@@ -73,6 +76,10 @@ def classify(messages):
     sensitive = bool(matched)
 
     is_complex = len(text) > COMPLEX_CHAR_THRESHOLD or bool(COMPLEX_CUES.search(text))
+
+    if DEBUG_CLASSIFY:
+        print(f"[classify] {len(messages)} msg(s), {len(text)} chars, matched={matched}, "
+              f"complex={is_complex}\n--- text head ---\n{text[:1500]}\n--- text tail ---\n{text[-500:]}")
 
     if sensitive:
         return {"route": "local", "sensitive": True, "complex": is_complex,

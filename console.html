@@ -101,6 +101,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const money = n => "$" + Number(n).toFixed(2);
+let lastFeedKey = null;
 
 async function tick(){
   let s; try{ s = await (await fetch("/stats")).json(); }catch(e){ return; }
@@ -115,9 +116,11 @@ async function tick(){
   $("saved").textContent = money(s.saved);
   $("spent").textContent = money(s.cloud_cost);
 
-  const feed = $("feed");
   if(!s.feed.length){ return; }
-  feed.innerHTML = s.feed.map(r => `
+  const feedKey = JSON.stringify(s.feed);
+  if(feedKey === lastFeedKey){ return; }  // nothing new — skip re-render to stop the flicker
+  lastFeedKey = feedKey;
+  $("feed").innerHTML = s.feed.map(r => `
     <div class="row">
       <span class="ts">${r.t}</span>
       <span class="badge ${r.route}">${r.route === "local" ? "on-prem" : "cloud"}</span>

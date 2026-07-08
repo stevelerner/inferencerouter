@@ -1,0 +1,5 @@
+export LOCAL_BASE="http://192.168.68.62:11434/v1"
+export LOCAL_MODEL="qwen3-coder-next:q4_K_M"
+export CLOUD_MODEL="claude-sonnet-5"
+export CLOUD_IN_PER_MTOK="3.0"
+export CLOUD_OUT_PER_MTOK="15.0"
