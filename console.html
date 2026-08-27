@@ -47,6 +47,7 @@
   .metric .v{font-family:var(--mono);font-size:28px;font-weight:600}
   .metric .k{color:var(--muted);font-size:12px;margin-top:4px}
   .v.saved{color:var(--local)} .v.spent{color:var(--cloud)}
+  .v.warn{color:var(--danger)}
 
   /* feed */
   .feed{display:flex;flex-direction:column;gap:0}
@@ -89,6 +90,8 @@
       <div class="metrics">
         <div class="metric"><div class="v saved" id="saved">$0.00</div><div class="k">saved vs all-cloud</div></div>
         <div class="metric"><div class="v spent" id="spent">$0.00</div><div class="k">cloud spend (only hard tasks)</div></div>
+        <div class="metric"><div class="v" id="trunc">0</div><div class="k">context truncations (secret + oversize)</div></div>
+        <div class="metric"><div class="v" id="ctx">—</div><div class="k">local context window</div></div>
       </div>
     </section>
 
@@ -105,7 +108,7 @@ let lastFeedKey = null;
 
 async function tick(){
   let s; try{ s = await (await fetch("/stats")).json(); }catch(e){ return; }
-  $("models").textContent = `${s.local_model}  ·  ${s.cloud_model}`;
+  $("models").textContent = `${s.local_model}  ·  ${s.cloud_model}  ·  residency:${s.residency ?? "?"}`;
   $("egress").textContent = s.sensitive_bytes_egressed;
   $("sens").textContent = s.sensitive;
   $("guarantee").classList.toggle("breach", s.sensitive_bytes_egressed > 0);
@@ -115,6 +118,9 @@ async function tick(){
   $("barC").style.width = (100*s.cloud/tot) + "%";
   $("saved").textContent = money(s.saved);
   $("spent").textContent = money(s.cloud_cost);
+  $("trunc").textContent = s.truncation_warnings ?? 0;
+  $("trunc").classList.toggle("warn", (s.truncation_warnings ?? 0) > 0);
+  $("ctx").textContent = s.local_ctx ? (s.local_ctx/1024) + "K" : "—";
 
   if(!s.feed.length){ return; }
   const feedKey = JSON.stringify(s.feed);

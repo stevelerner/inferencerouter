@@ -1,21 +1,49 @@
 # InferenceRouter
 
-A ~200-line OpenAI-compatible gateway that auto-routes each request between your
-on-prem model (local, private, ~free) and Claude (cloud, frontier) on two
-deterministic axes: **data sensitivity** and **task complexity**. Point any
-OpenAI-compatible client at it; watch the live console.
+A small OpenAI-compatible gateway that auto-routes each request between your
+on-prem model (local, private, ~free) and Claude (cloud, frontier) on three
+deterministic axes: **data sensitivity**, **task complexity**, and **local
+context fit**. It also serves autocomplete and embeddings entirely on-prem.
+Point any OpenAI-compatible client at it; watch the live console.
 
 ## Routing policy
 
-| Sensitive payload? | Complex? | Routes to | Why |
-|---|---|---|---|
-| yes | any | **on-prem** | source/PII must not leave the building |
-| no | no | **on-prem** | cheap task, no reason to pay cloud rates |
-| no | yes | **cloud** | frontier reasoning, nothing sensitive to leak |
+Three deterministic axes: **data sensitivity**, **task complexity**, and whether
+the payload still **fits the local context window**.
 
-Sensitivity = code blocks, file paths, keys, emails, SSNs. Cloud is **optional**;
-on-prem is not — if the cloud key is missing or a cloud call fails, it **fails
-safe to local**.
+| Condition | Routes to | Why |
+|---|---|---|
+| real secret (API key, private key, SSN, card no.) | **on-prem** | never leaves, no exceptions |
+| proprietary source/paths *and* `RESIDENCY=strict` | **on-prem** | your code stays in the building |
+| doesn't fit local context, nothing secret | **cloud** | only the frontier model has the window |
+| complex, nothing sensitive | **cloud** | frontier reasoning |
+| everything else | **on-prem** | no reason to pay cloud rates |
+
+Secrets outrank size: a secret-bearing payload too large for the local window
+stays local and is flagged as a **truncation warning** on the console rather
+than being shipped to the cloud.
+
+### Residency policy
+
+`RESIDENCY=strict` (default) treats code blocks and file paths as sensitive —
+maximum containment, but it means the frontier model never sees a hard *coding*
+question. `RESIDENCY=secrets-only` pins only real secrets on-prem and lets
+source code reach the cloud, which is usually what you want if the goal is
+better answers rather than strict data residency.
+
+Cloud is **optional**; on-prem is not — if the cloud key is missing, the cloud
+call errors, or a cloud *stream* fails mid-flight, it **fails safe to local**.
+
+## Endpoints
+
+| Endpoint | Routing | Model |
+|---|---|---|
+| `POST /v1/chat/completions` | routed (see above) | `LOCAL_MODEL` or `CLOUD_MODEL` |
+| `POST /v1/completions` | **always local** | `LOCAL_FIM` — fill-in-middle autocomplete |
+| `POST /v1/embeddings` | **always local** | `LOCAL_EMBED` — never egresses |
+
+Embeddings and autocomplete are the highest-volume, most code-revealing traffic
+an editor produces, so they are hard-wired on-prem with no routing decision.
 
 ## Run (2 minutes)
 
@@ -35,12 +63,21 @@ export LOCAL_BASE="http://<your-ollama-ip>:11434/v1"
 
 Then the rest of the config:
 ```bash
-export LOCAL_MODEL="qwen3-coder-next:q4_K_M"
-export CLOUD_MODEL="claude-sonnet-5"                    # <-- SET to your CURRENT model string
-# optional: current list price for an honest $ tally
-export CLOUD_IN_PER_MTOK="3.0"
-export CLOUD_OUT_PER_MTOK="15.0"
+export LOCAL_MODEL="qwen3.8:27b-mtp-q4_K_M"
+export LOCAL_FIM="qwen2.5-coder:1.5b-base"      # autocomplete (base model, FIM-capable)
+export LOCAL_EMBED="nomic-embed-text:latest"    # embeddings
+export CLOUD_MODEL="claude-opus-5"
+export RESIDENCY="strict"                       # or "secrets-only"
+export LOCAL_CTX_TOKENS="65536"                 # USABLE INPUT tokens — see note below
+export CLOUD_IN_PER_MTOK="5.0"
+export CLOUD_OUT_PER_MTOK="25.0"
 ```
+
+> **`LOCAL_CTX_TOKENS` is the usable *input* budget, not `num_ctx`.** Ollama
+> reserves roughly half the context window for generation, so `num_ctx=131072`
+> yields only ~65,538 tokens of prompt before it **silently truncates**. Set
+> this to about half your `OLLAMA_NUM_CTX` or the router's oversize guard will
+> not fire when it should.
 
 And finally, launch it (env vars only take effect at process start — re-run
 this after changing any of the above):
@@ -133,9 +170,18 @@ and the provider still doesn't show up under LLM Providers, the config wasn't
 picked up — double check the file path is `~/.config/zed/settings.json` and
 try a full quit-and-relaunch of Zed, not just a window reload.
 
-Keep the local model **qwen3-coder-next (non-reasoning)** to avoid a Zed
-inline-assistant bug with "thinking" tokens, and don't use Zed **External Agents**
-(Claude Code/Codex) here — they use their own auth/endpoint and bypass the router.
+> **`qwen3.8` is a thinking model, and Zed's inline assistant mishandles
+> "thinking" tokens.** A low output cap can also be consumed entirely by
+> reasoning, returning an empty completion — confirmed on this box. If the
+> inline assistant misbehaves, either raise the output cap or point
+> `LOCAL_MODEL` at a non-reasoning model for inline edits.
+
+Don't use Zed **External Agents** (Claude Code/Codex) here — they use their own
+auth/endpoint and bypass the router entirely.
+
+For autocomplete, point Zed's completion provider at the same base URL; the
+router serves `/v1/completions` from `LOCAL_FIM` (`qwen2.5-coder:1.5b-base`)
+and never consults the cloud.
 
 ### VS Code + Cline
 
@@ -157,11 +203,40 @@ Same three fields — base URL, a dummy key, and any model string — work for t
 
 ## Files
 - `router.py` — the gateway (routing, dispatch, telemetry, failsafe)
+- `sl-setup.sh` — my box's env (navigator, 192.168.68.71)
 - `console.html` — live ops console (polls `/stats` every second)
 - `demo_batch.py` — curated requests that exercise all six routing cells
 
-## Tips
-- Warm the on-prem model ahead of time: `OLLAMA_KEEP_ALIVE=60m`, and run one
-  throwaway prompt so the first real request isn't slow.
-- `CLOUD_MODEL` must be a valid current Anthropic model string — a wrong one
-  404s, which fails safe to local rather than erroring.
+## Tuning Ollama (measured on an RTX 5090, 32GB)
+
+`qwen3.8:27b-mtp-q4_K_M` weights are 17.5GB and sit 100% on GPU. The KV cache is
+allocated **lazily**, so `ollama ps` under-reports memory — trust `nvidia-smi`.
+
+| `num_ctx` | usable input | VRAM in use | gen tok/s | verdict |
+|---|---|---|---|---|
+| 32768 (old default) | ~16K | ~18GB | ~120 | too small for real code context |
+| 131072 | ~65K | ~26.9GB | ~104 | **recommended** — full GPU, room to spare |
+| 262144 | ~131K | spills to CPU | ~13 | 68% GPU offload, 8x slower — avoid |
+
+Set it in `/etc/systemd/system/ollama.service.d/override.conf`:
+
+```ini
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0"
+Environment="OLLAMA_KEEP_ALIVE=60m"
+Environment="OLLAMA_NUM_CTX=131072"
+```
+
+then `sudo systemctl daemon-reload && sudo systemctl restart ollama`.
+
+Other notes:
+- **Don't run the q8_0 quant.** At 30.4GB it only fits 91% on a 32GB card; the
+  9% CPU spill costs ~80% of throughput (26 tok/s vs 130). It also evicts the
+  q4 model, so every tier switch pays a ~45s reload. Pin q4 and step up to
+  Claude instead.
+- **Thinking tokens dominate short replies.** `qwen3.8` is a thinking model; a
+  low `num_predict` can be consumed entirely by reasoning, returning an empty
+  string. Raise the cap or disable thinking for quick completions.
+- `CLOUD_MODEL` must be a valid current Anthropic model string. The router
+  strips `temperature`/`top_p`/`top_k` on the cloud path because current Claude
+  models reject them with a 400 and most editors send them by default.
