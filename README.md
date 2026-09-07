@@ -1,38 +1,66 @@
 # InferenceRouter
 
-A small OpenAI-compatible gateway that auto-routes each request between your
+A minimal OpenAI-compatible gateway that auto-routes each request between your
 on-prem model (local, private, ~free) and Claude (cloud, frontier) on three
 deterministic axes: **data sensitivity**, **task complexity**, and **local
-context fit**. It also serves autocomplete and embeddings entirely on-prem.
-Point any OpenAI-compatible client at it; watch the live console.
+context fit**. Autocomplete and embeddings are always on-prem. Point any
+OpenAI-compatible client at it; watch the live console.
 
-## Routing policy
+## Quick Start (2 minutes)
 
-Three deterministic axes: **data sensitivity**, **task complexity**, and whether
-the payload still **fits the local context window**.
+```bash
+# 1. Set your local inference server (Ollama, vLLM, etc.)
+export LOCAL_BASE="http://localhost:11434/v1"
+export LOCAL_MODEL="llama2:70b"           # use any model you have
+export LOCAL_FIM="starcoder:1.3b"         # autocomplete
+export LOCAL_EMBED="nomic-embed-text"     # embeddings
 
-| Condition | Routes to | Why |
-|---|---|---|
-| real secret (API key, private key, SSN, card no.) | **on-prem** | never leaves, no exceptions |
-| proprietary source/paths *and* `RESIDENCY=strict` | **on-prem** | your code stays in the building |
-| doesn't fit local context, nothing secret | **cloud** | only the frontier model has the window |
-| complex, nothing sensitive | **cloud** | frontier reasoning |
-| everything else | **on-prem** | no reason to pay cloud rates |
+# 2. (Optional) Enable cloud routing with Claude
+export ANTHROPIC_API_KEY="sk-ant-..."
+export CLOUD_MODEL="claude-opus-5"        # or any Claude model
 
-Secrets outrank size: a secret-bearing payload too large for the local window
-stays local and is flagged as a **truncation warning** on the console rather
-than being shipped to the cloud.
+# 3. Run
+./run.sh
+# or: ./run.sh sk-ant-... (passes key via CLI)
 
-### Residency policy
+# 4. Open console at http://localhost:8000
+# Try the demo: python demo_batch.py
+```
 
-`RESIDENCY=strict` (default) treats code blocks and file paths as sensitive —
-maximum containment, but it means the frontier model never sees a hard *coding*
-question. `RESIDENCY=secrets-only` pins only real secrets on-prem and lets
-source code reach the cloud, which is usually what you want if the goal is
-better answers rather than strict data residency.
+No hardcoded model names—choose your own, swap anytime. See `.env.example` for all
+options and defaults.
 
-Cloud is **optional**; on-prem is not — if the cloud key is missing, the cloud
-call errors, or a cloud *stream* fails mid-flight, it **fails safe to local**.
+## Routing Logic
+
+Five axes (in priority order):
+
+1. **Secrets detected?** → **local** (even if oversized—flags truncation warning)
+   - API keys, private keys, SSNs, card numbers stay in the building
+
+2. **Payload too large?** → **cloud** (if no secrets)
+   - Exceeds local context ceiling → only frontier model has the window
+
+3. **Proprietary content?** → **local** (if `RESIDENCY=strict`)
+   - Code blocks, file paths treated as sensitive under strict mode
+
+4. **Complex task?** → **cloud**
+   - Keywords: refactor, architect, debug, optimize, distributed, etc.
+
+5. **Default** → **local**
+   - Simple task, nothing secret—no reason to pay cloud rates
+
+### Residency Modes
+
+- `RESIDENCY=strict` (default): Code blocks and file paths are sensitive. Maximum
+  containment, but frontier model won't see coding questions.
+- `RESIDENCY=secrets-only`: Only real secrets pin local; code can reach the cloud
+  for better answers (use this if you care about answer quality over strict
+  containment).
+
+### Cloud is Optional
+
+If `ANTHROPIC_API_KEY` is unset, disabled, or the API fails, the router fails
+safe to local. Cloud failures don't break your workflow.
 
 ## Endpoints
 
@@ -45,56 +73,59 @@ call errors, or a cloud *stream* fails mid-flight, it **fails safe to local**.
 Embeddings and autocomplete are the highest-volume, most code-revealing traffic
 an editor produces, so they are hard-wired on-prem with no routing decision.
 
-## Run (2 minutes)
+## Setup
 
-Cloud routing needs a Claude API key (skip this if you only want the on-prem
-path — the router fails safe to local without one):
-1. Sign in at [platform.claude.com](https://platform.claude.com) (or
-   console.anthropic.com).
-2. Go to **API Keys** → **Create Key**.
-3. Copy the `sk-ant-...` value — you won't be able to view it again later.
+### Required: Local Inference
 
-Set this to your actual Ollama box — `LOCAL_BASE` has no working default, so if
-you skip this the router falls back to an unresolvable placeholder host and
-every on-prem request fails:
+The router **requires** a local inference server (Ollama, vLLM, LM Studio, etc.).
+Set these three variables:
+
 ```bash
-export LOCAL_BASE="http://<your-ollama-ip>:11434/v1"
+export LOCAL_BASE="http://localhost:11434/v1"   # your inference server
+export LOCAL_MODEL="llama2:70b"                 # any model you have locally
+export LOCAL_EMBED="nomic-embed-text"           # for embeddings (can be same as LOCAL_MODEL)
+export LOCAL_FIM="starcoder:1.3b"               # for autocomplete (small, FIM-capable model)
 ```
 
-Then the rest of the config:
+### Optional: Cloud Routing
+
+To enable Claude routing (skip if you want local-only):
+
 ```bash
-export LOCAL_MODEL="qwen3.8:27b-mtp-q4_K_M"
-export LOCAL_FIM="qwen2.5-coder:1.5b-base"      # autocomplete (base model, FIM-capable)
-export LOCAL_EMBED="nomic-embed-text:latest"    # embeddings
-export CLOUD_MODEL="claude-opus-5"
-export RESIDENCY="strict"                       # or "secrets-only"
-export LOCAL_CTX_TOKENS="65536"                 # USABLE INPUT tokens — see note below
-export CLOUD_IN_PER_MTOK="5.0"
+export ANTHROPIC_API_KEY="sk-ant-..."  # from https://platform.claude.com → API Keys
+export CLOUD_MODEL="claude-opus-5"     # any Claude model (or leave unset for local-only)
+```
+
+### Advanced Configuration
+
+All options are in `.env.example`. Key ones:
+
+```bash
+export RESIDENCY="strict"              # or "secrets-only"
+export LOCAL_CTX_TOKENS="65536"        # usable input budget (roughly half OLLAMA_NUM_CTX)
+export CLOUD_IN_PER_MTOK="5.0"         # update if Claude prices change
 export CLOUD_OUT_PER_MTOK="25.0"
 ```
 
-> **`LOCAL_CTX_TOKENS` is the usable *input* budget, not `num_ctx`.** Ollama
-> reserves roughly half the context window for generation, so `num_ctx=131072`
-> yields only ~65,538 tokens of prompt before it **silently truncates**. Set
-> this to about half your `OLLAMA_NUM_CTX` or the router's oversize guard will
-> not fire when it should.
+> **`LOCAL_CTX_TOKENS` ≠ `num_ctx`:** Ollama reserves ~half the context for
+> generation. So `num_ctx=131072` gives ~65,536 usable input tokens. Set this
+> to prevent silent truncation on oversized payloads.
 
-And finally, launch it (env vars only take effect at process start — re-run
-this after changing any of the above):
+### Launch
+
 ```bash
-./run.sh sk-ant-...     # the key from step 3 — creates the venv on first run
+./run.sh                          # uses ANTHROPIC_API_KEY from environment
+./run.sh sk-ant-...               # or pass key via CLI
+./run.sh --local-only             # local inference only (no cloud routing)
+./run.sh --help                   # show all options
 ```
 
-`run.sh --help` shows all options. Running it with no arguments (and no
-`ANTHROPIC_API_KEY` already exported) prints that same help instead of
-guessing what you want. To run on-prem only, use `./run.sh --local-only`.
+The router creates a Python venv on first run and starts at **http://localhost:8000**.
 
-Open the console at **http://localhost:8000** .
+### Demo
 
-Try it with the curated batch of requests, which produces a clean on-prem/cloud
-split in ~20s so you can see the console in action:
 ```bash
-python demo_batch.py
+python demo_batch.py              # exercise routing with pre-made requests (~20s)
 ```
 
 ## Use it in your editor
@@ -201,11 +232,72 @@ Same three fields — base URL, a dummy key, and any model string — work for t
 `openai` Python/JS SDKs, `curl`, Continue, or anything else that speaks the
 `/v1/chat/completions` API.
 
+## Testing
+
+```bash
+# Install test dependencies
+pip install pytest
+
+# Run tests
+python -m pytest test_router.py -v
+
+# Run with debug output
+ROUTER_DEBUG=1 python -m pytest test_router.py -v
+```
+
+Tests cover:
+- Secret detection (API keys, SSNs, private keys)
+- Residency modes (strict vs. secrets-only)
+- Complexity detection (refactor, architect, debug, etc.)
+- Token estimation
+- Config validation
+- Vision content handling
+- Oversized payload routing
+
+## Code Quality
+
+- **Type hints** throughout for maintainability and IDE support
+- **Structured logging** with `logging` module (JSON-compatible)
+- **Config validation** at startup — fails loudly if required vars are missing
+- **Token estimation** via `tiktoken` (falls back to char-based if unavailable)
+- **No hardcoded models** — bring your own (local and cloud)
+
 ## Files
 - `router.py` — the gateway (routing, dispatch, telemetry, failsafe)
-- `sl-setup.sh` — my box's env (navigator, 192.168.68.71)
 - `console.html` — live ops console (polls `/stats` every second)
-- `demo_batch.py` — curated requests that exercise all six routing cells
+- `demo_batch.py` — curated requests that exercise all routing paths
+- `test_router.py` — unit tests for routing logic
+- `.env.example` — config template with all options explained
+- `run.sh` — startup script with venv management
+
+## Troubleshooting
+
+**"Configuration errors" at startup**
+- Check `.env.example` — you're missing a required env var (LOCAL_BASE, LOCAL_MODEL, etc.)
+- Validate your endpoint: `curl http://localhost:11434/v1/models`
+
+**All requests route to local, none to cloud**
+- Is `ANTHROPIC_API_KEY` set? (unset = local-only mode, which is intentional)
+- Check logs: `ROUTER_DEBUG=1 ./run.sh`
+- Verify key is valid: `curl -H "Authorization: Bearer $ANTHROPIC_API_KEY" https://api.anthropic.com/v1/models`
+
+**"Local inference failed"**
+- Ensure your Ollama/vLLM server is running and reachable
+- Check `LOCAL_BASE` URL in env or `.env.example`
+- Verify the model exists: `curl http://localhost:11434/v1/models`
+
+**High truncation warnings**
+- Increase `LOCAL_CTX_TOKENS` if your local model has a larger context window
+- Or reduce payload size (long conversations, large code blocks)
+
+**Slow responses**
+- Local inference slower than expected? Check GPU utilization (`nvidia-smi`)
+- Cloud routing slower? May be network latency or API backlog
+
+**Can't connect from editor (Zed, VS Code, etc.)**
+- Ensure router is running: `curl http://localhost:8000/`
+- Check base URL in editor is `http://localhost:8000/v1`
+- If editor is on another machine, use your server's IP: `http://<server-ip>:8000/v1`
 
 ## Tuning Ollama (measured on an RTX 5090, 32GB)
 

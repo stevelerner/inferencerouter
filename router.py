@@ -13,52 +13,87 @@ Endpoints:
   POST /v1/embeddings        — always local (never leaves the building)
 
 Run:  uvicorn router:app --host 0.0.0.0 --port 8000
-Env:  see the CONFIG block below.
+Env:  see the CONFIG block below or .env.example
 """
 
 import os
 import re
 import json
 import time
+import logging
 from collections import deque
 from pathlib import Path
+from typing import TypedDict, List, Tuple, Optional, Any, Dict
 
 import httpx
+import tiktoken
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 
-# ----------------------------------------------------------------------------
-# CONFIG (all overridable by environment variables)
-# ----------------------------------------------------------------------------
-LOCAL_BASE   = os.environ.get("LOCAL_BASE",  "http://ollamaIP:11434/v1")
-LOCAL_MODEL  = os.environ.get("LOCAL_MODEL", "qwen3.8:27b-mtp-q4_K_M")
-LOCAL_EMBED  = os.environ.get("LOCAL_EMBED", "nomic-embed-text:latest")
-LOCAL_FIM    = os.environ.get("LOCAL_FIM",   "qwen2.5-coder:1.5b-base")
-
-CLOUD_BASE   = os.environ.get("CLOUD_BASE",  "https://api.anthropic.com/v1")
-CLOUD_MODEL  = os.environ.get("CLOUD_MODEL", "claude-opus-5")
-CLOUD_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
+# Structured logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+log = logging.getLogger(__name__)
 
 # Cloud list price, $/million tokens — set to current rates for an honest tally.
 CLOUD_IN_PER_MTOK  = float(os.environ.get("CLOUD_IN_PER_MTOK",  "5.0"))
 CLOUD_OUT_PER_MTOK = float(os.environ.get("CLOUD_OUT_PER_MTOK", "25.0"))
 
-COMPLEX_CHAR_THRESHOLD = int(os.environ.get("COMPLEX_CHARS", "700"))
-
-# Local context ceiling. Ollama silently truncates past this, so the router
-# treats "too big for local" as its own routing axis rather than letting the
-# request quietly lose its head. Keep in sync with OLLAMA_NUM_CTX.
-LOCAL_CTX_TOKENS = int(os.environ.get("LOCAL_CTX_TOKENS", "32768"))
-CTX_SAFETY       = float(os.environ.get("CTX_SAFETY", "0.85"))  # leave room for the reply
-
-# Residency policy:
-#   strict      — source code and file paths are treated as sensitive (never leave)
-#   secrets-only— only real secrets pin local; code may go to the frontier model
-RESIDENCY = os.environ.get("RESIDENCY", "strict")
-
 # Sampling params current Claude models reject outright (400). Editors send
 # these by default, so strip them on the cloud path rather than 400-ing.
 CLOUD_STRIP_PARAMS = ("temperature", "top_p", "top_k")
+
+# Routing behavior
+COMPLEX_CHAR_THRESHOLD = int(os.environ.get("COMPLEX_CHARS", "700"))
+LOCAL_CTX_TOKENS = int(os.environ.get("LOCAL_CTX_TOKENS", "65536"))  # usable input budget
+CTX_SAFETY = float(os.environ.get("CTX_SAFETY", "0.85"))  # leave room for the reply
+
+# Residency policy: "strict" (code/paths sensitive) or "secrets-only" (only real secrets)
+RESIDENCY = os.environ.get("RESIDENCY", "strict")
+
+# ---- Model Configuration (all overridable by environment variables) ----
+# These intentionally have no hardcoded model names; you pick your own.
+# See .env.example for suggestions.
+
+LOCAL_BASE = os.environ.get("LOCAL_BASE", "")
+LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "")
+LOCAL_EMBED = os.environ.get("LOCAL_EMBED", "")
+LOCAL_FIM = os.environ.get("LOCAL_FIM", "")
+
+CLOUD_BASE = os.environ.get("CLOUD_BASE", "https://api.anthropic.com/v1")
+CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "")
+CLOUD_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+# Validate required config at startup
+def _validate_config():
+    """Ensure required configuration is present."""
+    errors = []
+
+    if not LOCAL_BASE:
+        errors.append("LOCAL_BASE is required (e.g., http://localhost:11434/v1)")
+    if not LOCAL_MODEL:
+        errors.append("LOCAL_MODEL is required (e.g., llama2:70b)")
+    if not LOCAL_EMBED:
+        errors.append("LOCAL_EMBED is required (e.g., nomic-embed-text)")
+    if not LOCAL_FIM:
+        errors.append("LOCAL_FIM is required for autocomplete (e.g., starcoder:1.3b)")
+
+    if CLOUD_KEY and not CLOUD_MODEL:
+        errors.append("CLOUD_MODEL is required when CLOUD_KEY is set")
+
+    if RESIDENCY not in ("strict", "secrets-only"):
+        errors.append(f"RESIDENCY must be 'strict' or 'secrets-only', got '{RESIDENCY}'")
+
+    if errors:
+        msg = "Configuration errors:\n" + "\n".join(f"  • {e}" for e in errors)
+        log.error(msg)
+        raise RuntimeError(msg)
+
+    log.info(f"Config loaded: local={LOCAL_MODEL}, cloud={CLOUD_MODEL or '(disabled)'}, residency={RESIDENCY}")
+
+_validate_config()
 
 # ----------------------------------------------------------------------------
 # CLASSIFIER  (deterministic on purpose — every decision is explainable)
@@ -85,29 +120,54 @@ COMPLEX_CUES = re.compile(
     r"consistency|concurren|migrat)", re.I)
 
 
-def _text_of(messages):
+class RoutingDecision(TypedDict):
+    """The output of the routing classifier."""
+    route: str  # "local" or "cloud"
+    sensitive: bool
+    complex: bool
+    oversize: bool
+    reason: str
+
+
+def _text_of(messages: List[Dict[str, Any]]) -> str:
+    """Extract plain text from OpenAI-compatible message format."""
     parts = []
     for m in messages:
         c = m.get("content", "")
-        if isinstance(c, list):  # OpenAI vision-style content blocks
+        if isinstance(c, list):  # vision-style content blocks
             c = " ".join(b.get("text", "") for b in c if isinstance(b, dict))
         parts.append(str(c))
     return "\n".join(parts)
 
 
-def est_tokens(s):  # cheap, honest-enough estimate for a live tally
-    return max(1, len(s) // 4)
+def est_tokens(s: str) -> int:
+    """Estimate token count using tiktoken (cl100k_base for Claude).
+    Falls back to character-based estimate if tiktoken fails."""
+    try:
+        enc = tiktoken.get_encoding("cl100k_base")
+        return max(1, len(enc.encode(s)))
+    except Exception:
+        # Fallback: rough estimate (usually 4 chars per token)
+        return max(1, len(s) // 4)
 
 
 DEBUG_CLASSIFY = os.environ.get("ROUTER_DEBUG") == "1"
 
 
-def classify(messages):
-    """Return dict: route, sensitive, complex, oversize, reason."""
+def classify(messages: List[Dict[str, Any]]) -> RoutingDecision:
+    """Classify a request into routing decision: local, cloud, or error.
+
+    Axes:
+    1. Secrets → always local, even if oversized (truncate with warning)
+    2. Oversized → cloud if no secrets (only cloud has the window)
+    3. Proprietary (under strict residency) → local
+    4. Complex → cloud (frontier reasoning)
+    5. Default → local (no reason to pay cloud rates)
+    """
     text = _text_of(messages)
     tokens = est_tokens(text)
 
-    secrets     = [lbl for pat, lbl in SECRET_PATTERNS if pat.search(text)]
+    secrets = [lbl for pat, lbl in SECRET_PATTERNS if pat.search(text)]
     proprietary = [lbl for pat, lbl in PROPRIETARY_PATTERNS if pat.search(text)]
 
     # Under strict residency, proprietary content is sensitive too.
@@ -115,26 +175,29 @@ def classify(messages):
     sensitive = bool(matched)
 
     is_complex = tokens * 4 > COMPLEX_CHAR_THRESHOLD or bool(COMPLEX_CUES.search(text))
-    oversize   = tokens > LOCAL_CTX_TOKENS * CTX_SAFETY
+    oversize = tokens > LOCAL_CTX_TOKENS * CTX_SAFETY
 
     if DEBUG_CLASSIFY:
-        print(f"[classify] {len(messages)} msg(s), ~{tokens} tok, secrets={secrets}, "
-              f"proprietary={proprietary}, complex={is_complex}, oversize={oversize}")
+        log.debug(f"{len(messages)} msg(s), ~{tokens} tok | "
+                  f"secrets={secrets} proprietary={proprietary} "
+                  f"complex={is_complex} oversize={oversize}")
 
-    def out(route, reason):
-        return {"route": route, "sensitive": sensitive, "complex": is_complex,
-                "oversize": oversize, "reason": reason}
+    def out(route: str, reason: str) -> RoutingDecision:
+        return RoutingDecision(
+            route=route, sensitive=sensitive, complex=is_complex,
+            oversize=oversize, reason=reason
+        )
 
     # 1. Real secrets pin local no matter what — even if they don't fit.
     if secrets:
         r = f"secret in payload ({secrets[0]}) — residency lock"
         if oversize:
-            r += f"  |  WARNING: ~{tokens} tok > local ctx {LOCAL_CTX_TOKENS}, will truncate"
+            r += f" [WARNING: ~{tokens} tok > local ctx, will truncate]"
         return out("local", r)
 
     # 2. Too big for the local window, nothing secret in it — cloud has the room.
     if oversize:
-        return out("cloud", f"~{tokens} tok exceeds local ctx {LOCAL_CTX_TOKENS} — cloud for the window")
+        return out("cloud", f"~{tokens} tok exceeds local ctx — cloud for the window")
 
     # 3. Proprietary source under strict residency.
     if sensitive:
@@ -158,18 +221,25 @@ STATE = {
 }
 
 
-def record(decision, model, tokens_in, tokens_out):
+def record(decision: RoutingDecision, model: str, tokens_in: int, tokens_out: int) -> None:
+    """Record telemetry for a routed request."""
     STATE["total"] += 1
     STATE[decision["route"]] += 1
     if decision["sensitive"]:
         STATE["sensitive"] += 1
     if decision.get("oversize") and decision["route"] == "local":
         STATE["truncation_warnings"] += 1
+
     cloud_cost = (tokens_in / 1e6) * CLOUD_IN_PER_MTOK + (tokens_out / 1e6) * CLOUD_OUT_PER_MTOK
     if decision["route"] == "cloud":
         STATE["cloud_cost"] += cloud_cost
     else:
         STATE["saved"] += cloud_cost  # would have cost this much on cloud
+
+    log.info(f"route={decision['route']} model={model} tokens_in={tokens_in} "
+             f"tokens_out={tokens_out} cost=${cloud_cost:.4f} "
+             f"reason={decision['reason'][:50]}...")
+
     STATE["feed"].appendleft({
         "t": time.strftime("%H:%M:%S"),
         "route": decision["route"],
@@ -183,18 +253,19 @@ def record(decision, model, tokens_in, tokens_out):
 # ----------------------------------------------------------------------------
 # DISPATCH
 # ----------------------------------------------------------------------------
-def backend_for(route):
+def backend_for(route: str) -> Tuple[str, str, Dict[str, str]]:
+    """Return (base_url, model, headers) for the routed backend."""
     if route == "cloud":
         return (CLOUD_BASE, CLOUD_MODEL, {"Authorization": f"Bearer {CLOUD_KEY}"})
     return (LOCAL_BASE, LOCAL_MODEL, {})
 
 
-def _native_base():
+def _native_base() -> str:
     """Ollama's native API root — strip the OpenAI-compat /v1 suffix if present."""
     return LOCAL_BASE.rstrip("/").removesuffix("/v1").rstrip("/")
 
 
-def upstream_body_for(route, body, model):
+def upstream_body_for(route: str, body: Dict, model: str) -> Dict:
     """Build the upstream payload, stripping params the backend rejects."""
     out = {**body, "model": model}
     if route == "cloud":
@@ -203,13 +274,13 @@ def upstream_body_for(route, body, model):
     return out
 
 
-def _sse_text_and_usage(raw: bytes):
+def _sse_text_and_usage(raw: bytes) -> Tuple[str, Optional[Dict]]:
     """Pull assistant text + usage out of a captured SSE stream.
 
-    The old code counted the whole wire format (data: envelopes, JSON keys) as
-    output tokens, which inflated the savings tally several-fold.
+    Counts actual output text, not wire format (data: envelopes, JSON keys).
     """
-    text, usage = [], None
+    text: List[str] = []
+    usage: Optional[Dict] = None
     for line in raw.decode("utf-8", "ignore").splitlines():
         if not line.startswith("data:"):
             continue
