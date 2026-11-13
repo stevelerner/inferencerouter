@@ -1,0 +1,16 @@
+// Merge into ~/.config/zed/settings.json (JSONC). Replace the path and the model tag.
+// Makes the ask_local tool available to Zed's agents, including Claude.
+// After saving, Zed's agent panel settings should show a green dot beside "local-delegate".
+{
+  "context_servers": {
+    "local-delegate": {
+      "source": "custom",
+      "command": "python3",
+      "args": ["/absolute/path/to/inferencerouter/delegate/server.py"],
+      "env": {
+        "LOCAL_BASE": "http://localhost:11434",
+        "LOCAL_MODEL": "your-model-tag"
+      }
+    }
+  }
+}

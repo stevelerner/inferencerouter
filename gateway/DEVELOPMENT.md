@@ -4,7 +4,7 @@
 
 ```bash
 # Clone and enter directory
-cd inferencerouter
+cd inferencerouter/gateway
 
 # Create venv and install dependencies (including dev)
 python3 -m venv .venv

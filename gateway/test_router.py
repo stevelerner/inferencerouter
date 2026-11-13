@@ -28,6 +28,23 @@ class TestClassify:
         assert decision["sensitive"] is True
         assert "secret" in decision["reason"]
 
+    @pytest.mark.parametrize("key", [
+        "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv",   # Anthropic
+        "sk-proj-AbCdEfGh12345678",              # OpenAI project key
+        "sk-AbCdEfGh1234",                       # legacy OpenAI
+    ])
+    def test_real_world_api_keys_pin_local(self, key):
+        d = router.classify([{"role": "user", "content": f"use {key} please"}])
+        assert d["route"] == "local" and d["sensitive"] is True and "secret" in d["reason"]
+
+    @pytest.mark.parametrize("text", [
+        "build the task-management-system module",
+        "write a risk-assessment-report",
+    ])
+    def test_words_containing_sk_are_not_secrets(self, text):
+        d = router.classify([{"role": "user", "content": text}])
+        assert "secret" not in d["reason"]
+
     def test_ssn_pins_local(self):
         """SSN patterns should pin to local."""
         messages = [{"role": "user", "content": "My SSN is 123-45-6789"}]
@@ -47,7 +64,7 @@ class TestClassify:
 
     def test_code_block_under_strict_residency(self):
         """Code blocks should pin to local under RESIDENCY=strict."""
-        with patch.dict(os.environ, {"RESIDENCY": "strict"}):
+        with patch.object(router, "RESIDENCY", "strict"):
             messages = [{
                 "role": "user",
                 "content": "```python\nprint('hello')\n```"
@@ -58,7 +75,7 @@ class TestClassify:
 
     def test_code_block_allowed_under_secrets_only(self):
         """Code blocks should be allowed to cloud under RESIDENCY=secrets-only."""
-        with patch.dict(os.environ, {"RESIDENCY": "secrets-only"}):
+        with patch.object(router, "RESIDENCY", "secrets-only"):
             # Small, simple code
             messages = [{
                 "role": "user",
@@ -113,7 +130,7 @@ class TestClassify:
 
     def test_secret_oversize_warning(self):
         """Oversized secret payloads should warn about truncation."""
-        with patch.dict(os.environ, {"LOCAL_CTX_TOKENS": "100"}):
+        with patch.object(router, "LOCAL_CTX_TOKENS", 100):
             # Force validation again (normally only runs at import)
             huge_secret = "sk-ant-" + ("x" * 10000)
             messages = [{"role": "user", "content": huge_secret}]
@@ -158,20 +175,20 @@ class TestConfigValidation:
 
     def test_missing_local_base_fails(self):
         """Config validation should fail if LOCAL_BASE is missing."""
-        with patch.dict(os.environ, {"LOCAL_BASE": ""}, clear=False):
+        with patch.object(router, "LOCAL_BASE", ""):
             with pytest.raises(RuntimeError, match="LOCAL_BASE"):
                 router._validate_config()
 
     def test_missing_local_model_fails(self):
         """Config validation should fail if LOCAL_MODEL is missing."""
-        with patch.dict(os.environ, {"LOCAL_MODEL": ""}, clear=False):
+        with patch.object(router, "LOCAL_MODEL", ""):
             with pytest.raises(RuntimeError, match="LOCAL_MODEL"):
                 router._validate_config()
 
     def test_invalid_residency_fails(self):
         """Config validation should reject invalid RESIDENCY."""
-        with patch.dict(os.environ, {"RESIDENCY": "invalid"}):
-            with pytest.raises(RuntimeError, match="residency"):
+        with patch.object(router, "RESIDENCY", "invalid"):
+            with pytest.raises(RuntimeError, match="RESIDENCY"):
                 router._validate_config()
 
     def test_valid_config_passes(self):

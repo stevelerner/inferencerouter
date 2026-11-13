@@ -100,7 +100,7 @@ _validate_config()
 # ----------------------------------------------------------------------------
 # Hard secrets: these pin on-prem under EVERY policy. Non-negotiable.
 SECRET_PATTERNS = [
-    (re.compile(r"(sk-[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{16,})"), "API key / access key"),
+    (re.compile(r"(\bsk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{16,})"), "API key / access key"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key"),
     (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),             "SSN pattern"),
     (re.compile(r"\b(?:\d[ -]*?){13,16}\b"),           "card-number pattern"),
