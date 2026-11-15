@@ -1,0 +1,4 @@
+{"id": "t-mechanical", "base": "146e633", "kind": "mechanical",
+ "protected": ["bench_checks/check_ingress_authz.py"],
+ "done": "/usr/bin/python3 bench_checks/check_ingress_authz.py",
+ "regression": "true"}

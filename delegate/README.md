@@ -107,3 +107,20 @@ Line numbers are added to files so the model can answer "which lines" questions.
 ```bash
 python3 -m unittest test_server test_stats -v
 ```
+
+## Implement: let the local model write code, with a test as the judge (`implement.py`)
+
+`server.py` reads and answers; `implement.py` writes. You give it a task file (goal, files to read, the files it may change,
+a one-line shape hint, and a shell command that exits 0 when done). It asks the local model for edits, applies them only to
+the allowed files, runs your command, and feeds failures back for up to 3 rounds. It never commits.
+
+```bash
+export LOCAL_BASE=http://localhost:11434 LOCAL_MODEL=<your-model>
+python3 implement.py path/to/TASK.md --repo . --in-place     # or omit --in-place to work in a git worktree
+```
+
+- Task format: [`TASK-TEMPLATE.md`](TASK-TEMPLATE.md). Rules the worker follows: [`implement-rules.md`](implement-rules.md).
+- Log: `~/.local/state/local-delegate/implement.jsonl` (rounds, tokens, seconds). Optional: `IMPLEMENT_NUM_CTX` (default 131072).
+- How we use it with Claude, the routing rule and the improvement loop: [`WORKFLOW.md`](WORKFLOW.md).
+- Measured savings (Claude alone vs Claude + local model, same tasks): [`EXPERIMENT.md`](EXPERIMENT.md), harness in [`bench/`](bench/), running notes in [`IMPROVEMENTS.md`](IMPROVEMENTS.md).
+- Tests: `python3 -m unittest test_implement -v`.

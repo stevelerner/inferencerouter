@@ -1,0 +1,15 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: checkout-from-frontend-only
+  namespace: boutique
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: checkoutservice
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/boutique/sa/frontend"]

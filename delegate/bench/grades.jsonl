@@ -1,0 +1,5 @@
+{"run": "t-logic-B-135844", "score": 1, "note": "correct and in scope; verbose state vars vs a simple per-service filter"}
+{"run": "t-logic-A-140002", "score": 2, "note": ""}
+{"run": "t-logic-hint-B-141619", "score": 2, "note": "same structure as A; hint worked"}
+{"run": "t-logic-hint-B-141821", "score": 2, "note": "same structure as A; hint worked"}
+{"run": "t-logic-hint-B-142010", "score": 2, "note": "same structure as A; hint worked"}

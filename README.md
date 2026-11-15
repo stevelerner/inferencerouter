@@ -76,14 +76,14 @@ For Zed, the same server is registered in `settings.json` instead; see [`delegat
 
 ```
 gateway/    the OpenAI-compatible routing proxy, its console, demo and tests
-delegate/   the MCP tool that lets one model hand jobs to another, its report, console and tests
+delegate/   the MCP tool that lets one model hand jobs to another, the implement loop (local model writes code, a test judges), its bench harness, report, console and tests
 ```
 
 ## Tests
 
 ```bash
 cd gateway  && pip install -r requirements.txt && python -m pytest test_router.py -q
-cd delegate && python3 -m unittest test_server test_stats -v        # no dependencies
+cd delegate && python3 -m unittest test_server test_stats test_implement -v   # no dependencies
 ```
 
 ## Not built (ideas only)
