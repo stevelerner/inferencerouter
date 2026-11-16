@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hand a coding task to the local Qwen on Ollama; get back a reviewed-by-tests diff.
 
-    implement.py TASK.md [--repo DIR] [--rounds 3] [--in-place] [--cleanup]
+    implement.py TASK.md [--repo DIR] [--rounds 2] [--in-place] [--cleanup]
 
 Creates a git worktree on branch qwen/<task>, asks the model for file edits, applies them (allow-list enforced),
 runs the task's test command, feeds failures back up to --rounds times, then prints a short report.
@@ -97,7 +97,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("task")
     ap.add_argument("--repo", default=".")
-    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--rounds", type=int, default=2)
     ap.add_argument("--in-place", action="store_true", help="edit --repo directly (no worktree); the caller owns isolation")
     ap.add_argument("--cleanup", action="store_true", help="remove the worktree and branch afterwards")
     a = ap.parse_args()

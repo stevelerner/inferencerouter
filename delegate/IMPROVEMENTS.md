@@ -26,3 +26,23 @@ One entry per surprise. Format: date, task, symptom, cause, change, result of re
 
 ## 2026-11-14, tooling moved
 - `implement.py`, the bench harness, rules, task template and these method docs now live in `inferencerouter/delegate/`. Config uses the shared `LOCAL_BASE` and `LOCAL_MODEL` (no built-in default model or host). Real-work log: `~/.local/state/local-delegate/implement.jsonl`. Added `test_implement.py` (11 tests, fake Ollama).
+
+## 2026-11-16, Istio ambient + TinyOlly work (13 runs)
+- 7 passed (84k in / 16k out Qwen tokens, mostly 1 round), 6 failed (183k in / 19k out) and were redone by hand. Qwen tokens are not Claude tokens; only passes saved Claude work.
+- Passed: new self-contained files or small additions with a test defined first (flaky manifest, journey, flag decoding, agent/grader, L7 coverage, compare_edges, events storage part c). Failed: edits to existing logic across modules or fuzzy requirements (events storage a and b, suggest_authz, clusters, graph helpers, seeder).
+- Changes made: `--rounds` default 3 to 2; gate added to the WORKFLOW routing rule; spec tips in `ai/DELEGATION.md`. Failure modes seen: Qwen answers "I'll explore" unless the spec opens with "Reply NOW with the FILE/EDIT blocks only"; `Done when` must be a strict `^[0-9]+ passed` match; Qwen edits forbidden test files, and failed rounds can leave applied edits (check `git diff`).
+
+| Task | Result | Rounds | Tokens in+out |
+|---|---|---|---|
+| flaky manifest | PASS | 1 | 5.2k+0.6k |
+| journey (trace hops) | PASS | 2 | 3.8k+2.3k |
+| flags decoding | PASS | 1 | 20.5k+5.1k |
+| agent.py / grader.py | PASS | 1 | 2.6k+1.3k |
+| L7 coverage | PASS | 1 | 5.2k+1.7k |
+| compare_edges | PASS | 1 | 3.9k+0.9k |
+| events storage c | PASS | 2 | 43.0k+3.9k |
+| events storage a, b | FAIL | 3 | 29.7k+7.1k, 15.6k+1.2k |
+| suggest_authz | FAIL | 3 | 70.8k+1.9k |
+| clusters | FAIL | 3 | 50.5k+8.1k |
+| graph helpers | FAIL | 3 | 12.0k+0.2k |
+| seeder | FAIL | 3 | 4.5k+0.3k |

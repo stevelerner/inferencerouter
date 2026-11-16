@@ -74,6 +74,8 @@ Cadence: after each batch of 3+ tasks, run `bench.py report`, read the log, chan
 ## Routing rule (update from data)
 Delegate when the task has a runnable check and Claude would otherwise write more than ~30 lines or touch 2+ files. Do it directly when it is a one-line fix, needs live debugging, or needs design judgment. First pilot data: the 2-file manifest task saved ~2% (fixed ~77K cached overhead dominates), the single-file logic task saved ~47%. Revise as data arrives.
 
+Update 2026-11 (13 runs on the Istio and TinyOlly work, see IMPROVEMENTS.md): delegate only when ALL hold: a new file or one small function (at most 2 files named); a failing test or exact command written first defines done; requirements fully stated. Edits to existing logic across modules or fuzzy specs failed 6 of 6. Cap at 2 rounds (round 3 never rescued a task and the failures were the most expensive). If a task fails the gate, split it or do it directly. Best savings are mechanical: boilerplate, docs tables, extra test cases, condensing long logs.
+
 ## Quality bar (every delegated change)
 1. The task's check passes and the regression command passes (independent re-run).
 2. Tests and check scripts untouched; only files in "May change" changed.
