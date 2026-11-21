@@ -45,7 +45,7 @@ Pilot cost was about $0.23 for four runs. A full 3 runs per arm per task is abou
 cd /Volumes/external/code/inferencerouter/delegate/bench
 python3 bench.py check t-logic            # base fails, gold passes (no model calls)
 python3 bench.py run t-logic A -n 3       # arm A, 3 runs
-python3 bench.py run t-logic B -n 3       # arm B, 3 runs (needs navigator online)
+python3 bench.py run t-logic B -n 3       # arm B, 3 runs (needs the Ollama host online)
 python3 bench.py grade <run-id> 0|1|2 "note"   # after reading /tmp/bench/<run-id>.diff
 python3 bench.py report
 ```

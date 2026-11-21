@@ -1,5 +1,5 @@
-# source this before ./run.sh   —   navigator: RTX 5090 32GB @ 192.168.68.71
-export LOCAL_BASE="http://192.168.68.71:11434/v1"
+# Copy to setup.local.sh (gitignored), edit, then: source setup.local.sh before ./run.sh
+export LOCAL_BASE="http://<your-ollama-host>:11434/v1"
 export LOCAL_MODEL="qwen3.8:27b-mtp-q4_K_M"
 export LOCAL_FIM="qwen2.5-coder:1.5b-base"
 export LOCAL_EMBED="nomic-embed-text:latest"

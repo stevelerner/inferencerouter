@@ -1,6 +1,6 @@
 # Working strategy: Claude plans and reviews, local Qwen builds
 
-Goal: spend Claude tokens on judgment (design, specs, review, debugging), and let the local `qwen3.8:27b-mtp-q4_K_M` on navigator (RTX 5090, ~118 tok/s) write most of the code. Model facts come from `ai/harnesses/models.toml` and your Ollama notes.
+Goal: spend Claude tokens on judgment (design, specs, review, debugging), and let the local `qwen3.8:27b-mtp-q4_K_M` on a local GPU host (RTX 5090, ~118 tok/s) write most of the code.
 
 ## The rule
 **Claude writes the spec and the test. Qwen writes the code until the test passes. Claude reads the diff.**
@@ -33,7 +33,7 @@ Do **not** delegate: anything needing live cluster iteration, ambiguous requirem
 - **Context cliff:** Ollama silently truncates past `num_ctx` and drops the *front* (system prompt included). Keep packets well under 100K tokens and set `num_ctx` per request. Never let a prompt overflow.
 - **Thinking:** `qwen3.8` is a thinking model. Use `think:false` for edits and short answers; `low` or default for design-heavy tasks; never `high`/`max` in a loop (4x slower, no gain measured).
 - **One GPU:** run one delegated job at a time. Parallel jobs fight over VRAM and the 196K window needs the card to itself.
-- **Network:** navigator (`192.168.68.71:11434`) must be reachable from this Mac. It was unreachable earlier and is now online; `ai/harnesses/status.py` probes it. `ai/harnesses/status.py` probes it.
+- **Network:** the Ollama host (`LOCAL_BASE`) must be reachable from this machine; check with `curl $LOCAL_BASE/api/tags`.
 - **Escalate:** if tests still fail after 3 rounds, the diff leaves the allow-list, or Qwen invents an API, Claude takes over the task. Log it.
 
 ## Pilot (do this before committing to the approach)
